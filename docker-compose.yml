@@ -1,0 +1,141 @@
+# Docker Compose file for Telegram Colorization Bot
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: colorization_bot_db
+    command: postgres -c max_connections=300 -c shared_buffers=256MB
+    environment:
+      POSTGRES_DB: colorization_bot
+      POSTGRES_USER: souljaboy
+      POSTGRES_PASSWORD: 22810absdb
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    ports:
+      - '5432:5432'
+    networks:
+      - bot_network
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U souljaboy -d colorization_bot']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: colorization_bot_redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - '6379:6379'
+    networks:
+      - bot_network
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Telegram Bot Application
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: colorization_bot
+    environment:
+      # Bot Configuration
+      BOT_TOKEN: ${BOT_TOKEN}
+      ADMIN_IDS: 475332177
+
+      # Database Configuration - Updated credentials
+      DATABASE_URL: postgresql://souljaboy:22810absdb@postgres:5432/colorization_bot
+      REDIS_URL: redis://redis:6379/0
+
+      # Model Configuration
+      MODEL_PATH: models/colorization_release_v2.caffemodel
+      PROTOTXT_PATH: models/colorization_deploy_v2.prototxt
+
+      # Performance Settings
+      MAX_CONCURRENT_REQUESTS: 100
+      DB_POOL_MIN_SIZE: 50
+      DB_POOL_MAX_SIZE: 200
+      THREAD_POOL_SIZE: 20
+      RATE_LIMIT_PER_USER: 50
+
+      # Monitoring
+      ENABLE_PERFORMANCE_MONITORING: 'true'
+      ENABLE_STATISTICS: 'true'
+      AUTO_CLEANUP_ENABLED: 'true'
+    volumes:
+      - ./models:/app/models:ro
+      - bot_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - bot_network
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'python', '-c', 'import sys; sys.exit(0)']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Database Admin Interface (pgAdmin)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: colorization_bot_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@bot.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - '8080:80'
+    depends_on:
+      - postgres
+    networks:
+      - bot_network
+    restart: unless-stopped
+    profiles:
+      - admin
+
+  # Optional: Redis Admin Interface
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: colorization_bot_redis_admin
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - '8081:8081'
+    depends_on:
+      - redis
+    networks:
+      - bot_network
+    restart: unless-stopped
+    profiles:
+      - admin
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  bot_logs:
+    driver: local
+
+networks:
+  bot_network:
+    driver: bridge
